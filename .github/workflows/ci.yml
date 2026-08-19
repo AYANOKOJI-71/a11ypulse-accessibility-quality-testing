@@ -1,0 +1,72 @@
+name: A11yPulse Quality Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  api-quality:
+    name: API quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install API dependencies
+        run: python -m pip install -e .[dev]
+      - name: Lint and test API
+        run: |
+          ruff check .
+          pytest -q
+
+  browser-quality:
+    name: Browser audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/auditor/pnpm-lock.yaml
+      - name: Install browser-audit dependencies
+        run: pnpm --dir apps/auditor install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --dir apps/auditor exec playwright install --with-deps chromium
+      - name: Start approved local target
+        run: PORT=5300 node apps/target/server.mjs > /tmp/a11ypulse-target.log 2>&1 &
+      - name: Audit both approved local targets
+        run: |
+          sleep 2
+          AUDIT_TARGET_BASE_URL=http://127.0.0.1:5300 node apps/auditor/audit.mjs demo-needs-work > /tmp/needs-work.json
+          AUDIT_TARGET_BASE_URL=http://127.0.0.1:5300 node apps/auditor/audit.mjs demo-reviewed-baseline > /tmp/reviewed-baseline.json
+          node scripts/assert_audit_results.mjs /tmp/needs-work.json /tmp/reviewed-baseline.json
+
+  web-quality:
+    name: Web quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install dashboard dependencies
+        run: pnpm --dir apps/web install --frozen-lockfile
+      - name: Test and build dashboard
+        run: |
+          pnpm --dir apps/web test
+          pnpm --dir apps/web run build
